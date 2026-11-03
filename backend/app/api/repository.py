@@ -14,7 +14,6 @@ from app.services.readme_badge_service import (
     generate_readme_badges,
     insert_badges_into_readme,
 )
-from app.services.readme_validation_service import validate_readme
 
 
 router = APIRouter(prefix="/api/repository", tags=["Repository"])
@@ -128,51 +127,4 @@ async def generate_repository_readme(
         raise HTTPException(
             status_code=502,
             detail="Unable to communicate with GitHub or local Ollama.",
-        )
-
-
-@router.post("/validate")
-async def validate_repository_readme(
-    url: str = Query(..., description="Public GitHub repository URL")
-):
-    """Validate README links, installation instructions, and structure."""
-
-    try:
-        repository = parse_github_url(url)
-
-        metadata = await get_repository_metadata(
-            repository["owner"],
-            repository["repository"],
-        )
-
-        tree = await get_repository_tree(
-            repository["owner"],
-            repository["repository"],
-            metadata["default_branch"],
-        )
-
-        readme = await get_repository_readme(
-            repository["owner"],
-            repository["repository"],
-        )
-
-        validation = validate_readme(
-            content=readme["content"],
-            repository_files=tree.get("files", []),
-        )
-
-        return {
-            "success": True,
-            "repository": metadata["full_name"],
-            "readme_exists": readme["exists"],
-            "validation": validation,
-        }
-
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-
-    except httpx.HTTPError:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to communicate with GitHub.",
         )
