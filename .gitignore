@@ -1,27 +1,6 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-.pytest_cache/
 .venv/
 venv/
-
-# Environment variables
+.pytest_cache/
+__pycache__/
+*.pyc
 .env
-.env.*
-
-# Keep the example configuration
-!.env.example
-
-# Frontend
-node_modules/
-dist/
-build/
-
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
