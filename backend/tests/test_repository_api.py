@@ -32,15 +32,22 @@ def test_analyze_repository(monkeypatch):
             "truncated": False,
         }
 
+    async def mock_readme(owner, repository):
+        return {
+            "exists": True,
+            "filename": "README.md",
+            "content": "# Test Project\n\nA sample README.",
+            "size": 31,
+        }
+
     monkeypatch.setattr(
-        repository_api,
-        "get_repository_metadata",
-        mock_metadata,
+        repository_api, "get_repository_metadata", mock_metadata
     )
     monkeypatch.setattr(
-        repository_api,
-        "get_repository_tree",
-        mock_tree,
+        repository_api, "get_repository_tree", mock_tree
+    )
+    monkeypatch.setattr(
+        repository_api, "get_repository_readme", mock_readme
     )
 
     response = client.get(
@@ -55,10 +62,9 @@ def test_analyze_repository(monkeypatch):
     assert data["repository"]["full_name"] == "owner/project"
     assert data["analysis"]["total_files"] == 3
     assert data["analysis"]["languages"] == {"Python": 1}
-    assert data["analysis"]["important_files"] == [
-        "README.md",
-        "requirements.txt",
-    ]
+    assert data["readme"]["exists"] is True
+    assert data["readme"]["filename"] == "README.md"
+    assert data["readme"]["content"].startswith("# Test Project")
 
 
 def test_analyze_repository_rejects_invalid_url():

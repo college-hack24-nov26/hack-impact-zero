@@ -5,6 +5,7 @@ from app.services.repository_service import parse_github_url
 from app.services.github_service import get_repository_metadata
 from app.services.repository_tree_service import get_repository_tree
 from app.services.repository_analysis_service import analyze_repository_structure
+from app.services.readme_service import get_repository_readme
 
 
 router = APIRouter(prefix="/api/repository", tags=["Repository"])
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/api/repository", tags=["Repository"])
 async def analyze_repository(
     url: str = Query(..., description="Public GitHub repository URL")
 ):
-    """Analyze GitHub repository metadata and project structure."""
+    """Analyze GitHub repository metadata, structure, and README."""
 
     try:
         repository = parse_github_url(url)
@@ -32,10 +33,16 @@ async def analyze_repository(
 
         analysis = analyze_repository_structure(tree)
 
+        readme = await get_repository_readme(
+            repository["owner"],
+            repository["repository"],
+        )
+
         return {
             "success": True,
             "repository": metadata,
             "analysis": analysis,
+            "readme": readme,
         }
 
     except ValueError as error:
