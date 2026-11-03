@@ -136,3 +136,66 @@ def test_generate_repository_readme_rejects_invalid_url():
 
     assert response.status_code == 400
     assert "github.com" in response.json()["detail"]
+
+
+def test_validate_repository_readme(monkeypatch):
+    mock_repository_data(monkeypatch)
+
+    response = client.post(
+        "/api/repository/validate",
+        params={"url": "https://github.com/owner/project"},
+    )
+
+    data = response.json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert data["repository"] == "owner/project"
+    assert data["readme_exists"] is True
+    assert data["validation"]["is_valid"] is True
+    assert data["validation"]["warning_count"] == 0
+    assert data["validation"]["severity_counts"] == {
+        "critical": 0,
+        "warning": 0,
+        "unverified": 0,
+    }
+    assert data["validation"]["checked_files"] == 3
+
+
+def test_validate_repository_readme_with_missing_readme(monkeypatch):
+    mock_repository_data(monkeypatch)
+
+    async def mock_readme_missing(owner, repository):
+        return {
+            "exists": False,
+            "filename": None,
+            "content": "",
+            "size": 0,
+        }
+
+    monkeypatch.setattr(
+        repository_api, "get_repository_readme", mock_readme_missing
+    )
+
+    response = client.post(
+        "/api/repository/validate",
+        params={"url": "https://github.com/owner/project"},
+    )
+
+    data = response.json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert data["readme_exists"] is False
+    assert data["validation"]["is_valid"] is False
+    assert data["validation"]["severity_counts"]["critical"] == 1
+
+
+def test_validate_repository_readme_rejects_invalid_url():
+    response = client.post(
+        "/api/repository/validate",
+        params={"url": "https://example.com/owner/project"},
+    )
+
+    assert response.status_code == 400
+    assert "github.com" in response.json()["detail"]
