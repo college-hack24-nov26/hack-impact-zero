@@ -21,10 +21,26 @@ def test_analyze_repository(monkeypatch):
             "html_url": f"https://github.com/{owner}/{repository}",
         }
 
+    async def mock_tree(owner, repository, branch):
+        return {
+            "files": [
+                {"path": "README.md", "type": "blob", "size": 500},
+                {"path": "requirements.txt", "type": "blob", "size": 100},
+                {"path": "main.py", "type": "blob", "size": 300},
+            ],
+            "total_items": 3,
+            "truncated": False,
+        }
+
     monkeypatch.setattr(
         repository_api,
         "get_repository_metadata",
         mock_metadata,
+    )
+    monkeypatch.setattr(
+        repository_api,
+        "get_repository_tree",
+        mock_tree,
     )
 
     response = client.get(
@@ -32,9 +48,17 @@ def test_analyze_repository(monkeypatch):
         params={"url": "https://github.com/owner/project"},
     )
 
+    data = response.json()
+
     assert response.status_code == 200
-    assert response.json()["success"] is True
-    assert response.json()["repository"]["full_name"] == "owner/project"
+    assert data["success"] is True
+    assert data["repository"]["full_name"] == "owner/project"
+    assert data["analysis"]["total_files"] == 3
+    assert data["analysis"]["languages"] == {"Python": 1}
+    assert data["analysis"]["important_files"] == [
+        "README.md",
+        "requirements.txt",
+    ]
 
 
 def test_analyze_repository_rejects_invalid_url():
