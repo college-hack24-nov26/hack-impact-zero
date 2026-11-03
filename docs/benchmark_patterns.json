@@ -1,0 +1,39 @@
+{
+  "essential_sections": [
+    {
+      "name": "Badges & Shields",
+      "weight": 15,
+      "pattern": "!\\[.*\\]\\(https://img.shields.io/.*\\)"
+    },
+    {
+      "name": "Project Banner / Logo",
+      "weight": 10,
+      "pattern": "!\\[.*\\]\\(.*\\)"
+    },
+    {
+      "name": "Overview & Elevator Pitch",
+      "weight": 15,
+      "pattern": "(?i)##\\s*(about|overview|introduction)"
+    },
+    {
+      "name": "Key Features List",
+      "weight": 15,
+      "pattern": "(?i)##\\s*features"
+    },
+    {
+      "name": "Architecture / Workflow Diagram",
+      "weight": 15,
+      "pattern": "```mermaid"
+    },
+    {
+      "name": "Quick Start / Installation",
+      "weight": 15,
+      "pattern": "(?i)##\\s*(installation|quick\\s*start|getting\\s*started)"
+    },
+    {
+      "name": "License & Contributing",
+      "weight": 15,
+      "pattern": "(?i)##\\s*(license|contributing)"
+    }
+  ]
+}
