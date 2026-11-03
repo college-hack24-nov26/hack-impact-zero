@@ -1,77 +1,32 @@
+import json
+import os
 import re
 
+BENCHMARK_FILE = os.path.join(os.path.dirname(__file__), "../../../docs/benchmark_patterns.json")
 
-EXPECTED_SECTIONS = {
-    "installation": ["installation", "setup", "getting started"],
-    "usage": ["usage", "how to use", "quick start"],
-    "features": ["features", "key features"],
-    "requirements": ["requirements", "prerequisites", "dependencies"],
-    "contributing": ["contributing", "contribution"],
-    "license": ["license", "licence"],
-}
+def analyze_and_score_readme(readme_content: str) -> dict:
+    if not os.path.exists(BENCHMARK_FILE):
+        return {"score": 0, "present_features": [], "missing_features": []}
 
+    with open(BENCHMARK_FILE, "r", encoding="utf-8") as f:
+        benchmarks = json.load(f)["essential_sections"]
 
-def analyze_readme(content: str) -> dict:
-    """Analyze README content and identify documentation gaps."""
+    current_score = 0
+    max_score = sum(item["weight"] for item in benchmarks)
+    present_features = []
+    missing_features = []
 
-    content = content or ""
+    for item in benchmarks:
+        if re.search(item["pattern"], readme_content):
+            current_score += item["weight"]
+            present_features.append(item["name"])
+        else:
+            missing_features.append(item["name"])
 
-    headings = re.findall(
-        r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$",
-        content,
-        re.MULTILINE,
-    )
-
-    normalized_headings = [
-        heading.strip().lower()
-        for heading in headings
-    ]
-
-    missing_sections = []
-
-    for section, alternatives in EXPECTED_SECTIONS.items():
-        found = any(
-            alternative in heading
-            for heading in normalized_headings
-            for alternative in alternatives
-        )
-
-        if not found:
-            missing_sections.append(section)
-
-    # Detect normal Markdown links, excluding image links.
-    links = re.findall(
-        r'(?<!!)\[[^\]]+\]\((https?://[^)\s]+)',
-        content,
-    )
-
-    # Detect Markdown images.
-    images = re.findall(
-        r'!\[[^\]]*\]\((https?://[^)\s]+)',
-        content,
-    )
-
-    # Detect Shields.io badge URLs.
-    badges = re.findall(
-        r'https?://img\.shields\.io/[^)\s]+',
-        content,
-        re.IGNORECASE,
-    )
-
-    code_blocks = re.findall(r"```", content)
+    normalized_score = round((current_score / max_score) * 100) if max_score > 0 else 0
 
     return {
-        "word_count": len(content.split()),
-        "character_count": len(content),
-        "headings": headings,
-        "heading_count": len(headings),
-        "links": links,
-        "link_count": len(links),
-        "images": images,
-        "image_count": len(images),
-        "badges": badges,
-        "badge_count": len(badges),
-        "code_block_count": len(code_blocks) // 2,
-        "missing_sections": missing_sections,
-        "is_empty": not content.strip(),
+        "score": normalized_score,
+        "present_features": present_features,
+        "missing_features": missing_features
     }
