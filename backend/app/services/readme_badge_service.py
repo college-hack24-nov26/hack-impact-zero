@@ -1,4 +1,5 @@
 
+import re
 from urllib.parse import quote
 
 
@@ -18,29 +19,15 @@ def generate_readme_badges(repository: dict) -> dict:
     safe_project_url = project_url.rstrip("/")
 
     badge_definitions = [
-        (
-            "GitHub Stars",
-            f"https://img.shields.io/github/stars/{safe_repository}?style=for-the-badge",
-        ),
-        (
-            "GitHub Forks",
-            f"https://img.shields.io/github/forks/{safe_repository}?style=for-the-badge",
-        ),
-        (
-            "GitHub Issues",
-            f"https://img.shields.io/github/issues/{safe_repository}?style=for-the-badge",
-        ),
-        (
-            "Last Commit",
-            f"https://img.shields.io/github/last-commit/{safe_repository}?style=for-the-badge",
-        ),
-        (
-            "Top Language",
-            f"https://img.shields.io/github/languages/top/{safe_repository}?style=for-the-badge",
-        ),
+        ("GitHub Stars", f"https://img.shields.io/github/stars/{safe_repository}?style=for-the-badge"),
+        ("GitHub Forks", f"https://img.shields.io/github/forks/{safe_repository}?style=for-the-badge"),
+        ("GitHub Issues", f"https://img.shields.io/github/issues/{safe_repository}?style=for-the-badge"),
+        ("Last Commit", f"https://img.shields.io/github/last-commit/{safe_repository}?style=for-the-badge"),
+        ("Top Language", f"https://img.shields.io/github/languages/top/{safe_repository}?style=for-the-badge"),
     ]
 
     language = repository.get("language")
+
     if language:
         badge_definitions.append(
             (
@@ -59,12 +46,37 @@ def generate_readme_badges(repository: dict) -> dict:
         for name, image_url in badge_definitions
     ]
 
-    markdown = "\n".join(badge["markdown"] for badge in badges)
-
     return {
         "repository": full_name,
         "project_url": safe_project_url,
         "badges": badges,
         "badge_count": len(badges),
-        "markdown": markdown,
+        "markdown": "\n".join(badge["markdown"] for badge in badges),
     }
+
+
+def insert_badges_into_readme(content: str, badge_markdown: str) -> str:
+    """Insert generated badges immediately after the first README title."""
+
+    content = (content or "").strip()
+    badge_markdown = (badge_markdown or "").strip()
+
+    if not badge_markdown:
+        return content
+
+    if not content:
+        return badge_markdown
+
+    title_match = re.search(r"^# .+$", content, re.MULTILINE)
+
+    if title_match:
+        insertion_point = title_match.end()
+        return (
+            content[:insertion_point]
+            + "\n\n"
+            + badge_markdown
+            + "\n\n"
+            + content[insertion_point:].lstrip()
+        )
+
+    return badge_markdown + "\n\n" + content

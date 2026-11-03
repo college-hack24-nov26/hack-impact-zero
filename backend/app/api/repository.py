@@ -8,10 +8,12 @@ from app.services.repository_tree_service import get_repository_tree
 from app.services.repository_analysis_service import analyze_repository_structure
 from app.services.readme_service import get_repository_readme
 from app.services.readme_analysis_service import analyze_readme
-from app.services.readme_recommendation_service import (
-    generate_readme_recommendations,
-)
+from app.services.readme_recommendation_service import generate_readme_recommendations
 from app.services.readme_generation_service import generate_readme
+from app.services.readme_badge_service import (
+    generate_readme_badges,
+    insert_badges_into_readme,
+)
 
 
 router = APIRouter(prefix="/api/repository", tags=["Repository"])
@@ -82,7 +84,7 @@ async def analyze_repository(
 async def generate_repository_readme(
     url: str = Query(..., description="Public GitHub repository URL")
 ):
-    """Generate an improved README using local Ollama."""
+    """Generate an improved README with automatically inserted badges."""
 
     try:
         metadata, analysis, readme = await collect_repository_data(url)
@@ -93,6 +95,14 @@ async def generate_repository_readme(
                 analysis=analysis,
                 existing_readme=readme["content"],
             )
+
+            badge_result = generate_readme_badges(metadata)
+
+            final_readme = insert_badges_into_readme(
+                generated["content"],
+                badge_result["markdown"],
+            )
+
         except ValueError as error:
             raise HTTPException(
                 status_code=502,
@@ -102,10 +112,12 @@ async def generate_repository_readme(
         return {
             "success": True,
             "repository": metadata["full_name"],
-            "generated_readme": generated["content"],
+            "generated_readme": final_readme,
             "model": generated["model"],
             "provider": generated["provider"],
-            "word_count": generated["word_count"],
+            "word_count": len(final_readme.split()),
+            "badges": badge_result["badges"],
+            "badge_count": badge_result["badge_count"],
         }
 
     except ValueError as error:

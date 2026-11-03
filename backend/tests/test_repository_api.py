@@ -120,9 +120,12 @@ def test_generate_repository_readme(monkeypatch):
     assert data["success"] is True
     assert data["repository"] == "owner/project"
     assert data["generated_readme"].startswith("# Improved Project")
+    assert "img.shields.io" in data["generated_readme"]
+    assert "https://github.com/owner/project" in data["generated_readme"]
+    assert data["badge_count"] == 6
     assert data["model"] == "qwen2.5-coder:1.5b"
     assert data["provider"] == "ollama"
-    assert data["word_count"] == 6
+    assert data["word_count"] > 0
 
 
 def test_generate_repository_readme_rejects_invalid_url():
