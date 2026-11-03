@@ -7,6 +7,9 @@ from app.services.repository_tree_service import get_repository_tree
 from app.services.repository_analysis_service import analyze_repository_structure
 from app.services.readme_service import get_repository_readme
 from app.services.readme_analysis_service import analyze_readme
+from app.services.readme_recommendation_service import (
+    generate_readme_recommendations,
+)
 
 
 router = APIRouter(prefix="/api/repository", tags=["Repository"])
@@ -41,12 +44,18 @@ async def analyze_repository(
 
         readme_analysis = analyze_readme(readme["content"])
 
+        recommendations = generate_readme_recommendations(
+            readme_analysis
+        )
+
         return {
             "success": True,
             "repository": metadata,
             "analysis": analysis,
             "readme": readme,
             "readme_analysis": readme_analysis,
+            "recommendations": recommendations,
+            "recommendation_count": len(recommendations),
         }
 
     except ValueError as error:
