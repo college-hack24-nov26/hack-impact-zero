@@ -1,5 +1,6 @@
 
 from fastapi.testclient import TestClient
+import httpx
 
 from app.main import app
 from app.api import repository as repository_api
@@ -199,3 +200,20 @@ def test_validate_repository_readme_rejects_invalid_url():
 
     assert response.status_code == 400
     assert "github.com" in response.json()["detail"]
+
+
+def test_validate_repository_readme_github_api_failure(monkeypatch):
+    async def failing_metadata(owner, repository):
+        raise httpx.HTTPError("GitHub API unavailable")
+
+    monkeypatch.setattr(
+        repository_api, "get_repository_metadata", failing_metadata
+    )
+
+    response = client.post(
+        "/api/repository/validate",
+        params={"url": "https://github.com/owner/project"},
+    )
+
+    assert response.status_code == 502
+    assert "Unable to communicate with GitHub" in response.json()["detail"]
