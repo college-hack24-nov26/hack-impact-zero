@@ -1,130 +1,56 @@
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional, List
+from app.services.readme_analysis_service import analyze_and_score_readme
+from app.services.readme_badge_service import generate_tech_badges
+from app.services.readme_generation_service import generate_beautified_readme
+from app.services.github_service import fetch_github_repository_data
 
-from fastapi import APIRouter, HTTPException, Query
-import httpx
+router = APIRouter()
 
-from app.services.repository_service import parse_github_url
-from app.services.github_service import get_repository_metadata
-from app.services.repository_tree_service import get_repository_tree
-from app.services.repository_analysis_service import analyze_repository_structure
-from app.services.readme_service import get_repository_readme
-from app.services.readme_analysis_service import analyze_readme
-from app.services.readme_recommendation_service import generate_readme_recommendations
-from app.services.readme_generation_service import generate_readme
-from app.services.readme_badge_service import (
-    generate_readme_badges,
-    insert_badges_into_readme,
-)
+class EnhanceRequest(BaseModel):
+    readme_content: Optional[str] = ""
+    github_url: Optional[str] = ""
+    tech_stack: Optional[List[str]] = ["python", "fastapi", "react"]
+    groq_api_key: Optional[str] = ""
 
+@router.post("/process-readme")
+def process_readme(payload: EnhanceRequest):
+    readme_text = payload.readme_content or ""
+    detected_stack = payload.tech_stack or []
+    owner, repo_name = None, "Project"
 
-router = APIRouter(prefix="/api/repository", tags=["Repository"])
+    if payload.github_url:
+        gh_data = fetch_github_repository_data(payload.github_url)
+        if "error" in gh_data:
+            raise HTTPException(status_code=400, detail=gh_data["error"])
+        readme_text = gh_data["readme_content"]
+        detected_stack = list(set(detected_stack + gh_data["detected_stack"]))
+        owner, repo_name = gh_data["owner"], gh_data["repo"]
 
+    if not readme_text.strip():
+        readme_text = "# Sample Project\n\nInitial repository context."
 
-async def collect_repository_data(url: str):
-    """Collect repository metadata, structure, and README."""
+    original_analysis = analyze_and_score_readme(readme_text)
+    badges = generate_tech_badges(detected_stack, repo_owner=owner, repo_name=repo_name)
 
-    repository = parse_github_url(url)
-
-    metadata = await get_repository_metadata(
-        repository["owner"],
-        repository["repository"],
+    beautified_content = generate_beautified_readme(
+        readme_text, 
+        original_analysis, 
+        badges,
+        repo_name=repo_name,
+        custom_api_key=payload.groq_api_key
     )
 
-    tree = await get_repository_tree(
-        repository["owner"],
-        repository["repository"],
-        metadata["default_branch"],
-    )
+    improved_analysis = analyze_and_score_readme(beautified_content)
 
-    analysis = analyze_repository_structure(tree)
-
-    readme = await get_repository_readme(
-        repository["owner"],
-        repository["repository"],
-    )
-
-    return metadata, analysis, readme
-
-
-@router.get("/analyze")
-async def analyze_repository(
-    url: str = Query(..., description="Public GitHub repository URL")
-):
-    """Analyze repository metadata, structure, and README quality."""
-
-    try:
-        metadata, analysis, readme = await collect_repository_data(url)
-
-        readme_analysis = analyze_readme(readme["content"])
-
-        recommendations = generate_readme_recommendations(
-            readme_analysis
-        )
-
-        return {
-            "success": True,
-            "repository": metadata,
-            "analysis": analysis,
-            "readme": readme,
-            "readme_analysis": readme_analysis,
-            "recommendations": recommendations,
-            "recommendation_count": len(recommendations),
-        }
-
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-
-    except httpx.HTTPError:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to communicate with GitHub.",
-        )
-
-
-@router.post("/generate")
-async def generate_repository_readme(
-    url: str = Query(..., description="Public GitHub repository URL")
-):
-    """Generate an improved README with automatically inserted badges."""
-
-    try:
-        metadata, analysis, readme = await collect_repository_data(url)
-
-        try:
-            generated = await generate_readme(
-                repository=metadata,
-                analysis=analysis,
-                existing_readme=readme["content"],
-            )
-
-            badge_result = generate_readme_badges(metadata)
-
-            final_readme = insert_badges_into_readme(
-                generated["content"],
-                badge_result["markdown"],
-            )
-
-        except ValueError as error:
-            raise HTTPException(
-                status_code=502,
-                detail=f"README generation failed: {error}",
-            )
-
-        return {
-            "success": True,
-            "repository": metadata["full_name"],
-            "generated_readme": final_readme,
-            "model": generated["model"],
-            "provider": generated["provider"],
-            "word_count": len(final_readme.split()),
-            "badges": badge_result["badges"],
-            "badge_count": badge_result["badge_count"],
-        }
-
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-
-    except httpx.HTTPError:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to communicate with GitHub or local Ollama.",
-        )
+    return {
+        "repo_name": repo_name,
+        "original_readme": readme_text,
+        "beautified_readme": beautified_content,
+        "detected_stack": detected_stack,
+        "original_score": original_analysis["score"],
+        "improved_score": improved_analysis["score"],
+        "missing_features": original_analysis["missing_features"],
+        "present_features": original_analysis["present_features"]
+    }

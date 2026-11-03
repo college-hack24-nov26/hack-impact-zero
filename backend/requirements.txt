@@ -1,6 +1,5 @@
 fastapi
-uvicorn[standard]
-pydantic-settings
+uvicorn
+requests
+pydantic
 python-dotenv
-httpx
-pytest

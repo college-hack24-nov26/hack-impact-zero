@@ -1,37 +1,58 @@
-import httpx
+import re
+import requests
 
+def parse_github_url(url: str) -> tuple:
+    pattern = r"github\.com/([^/]+)/([^/]+)"
+    match = re.search(pattern, url)
+    if match:
+        owner = match.group(1)
+        repo = match.group(2).replace(".git", "")
+        return owner, repo
+    return None, None
 
-GITHUB_API_BASE = "https://api.github.com"
+def fetch_github_repository_data(repo_url: str) -> dict:
+    owner, repo = parse_github_url(repo_url)
+    if not owner or not repo:
+        return {"error": "Invalid GitHub repository URL format."}
 
+    branches = ["main", "master"]
+    readme_content = ""
+    found_branch = ""
 
-async def get_repository_metadata(owner: str, repository: str) -> dict:
-    """Fetch public repository metadata from GitHub."""
+    for branch in branches:
+        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/README.md"
+        res = requests.get(raw_url, timeout=10)
+        if res.status_code == 200:
+            readme_content = res.text
+            found_branch = branch
+            break
 
-    url = f"{GITHUB_API_BASE}/repos/{owner}/{repository}"
+    if not readme_content:
+        readme_content = f"# {repo}\n\nNo README.md file found in default branches."
 
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+    tree_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{found_branch or 'main'}?recursive=1"
+    detected_stack = []
+    
+    try:
+        tree_res = requests.get(tree_url, timeout=10)
+        if tree_res.status_code == 200:
+            tree_data = tree_res.json().get("tree", [])
+            file_paths = [item["path"].lower() for item in tree_data]
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(url, headers=headers)
-
-    if response.status_code == 404:
-        raise ValueError("GitHub repository not found.")
-
-    response.raise_for_status()
-
-    data = response.json()
+            if any(f.endswith(".py") for f in file_paths): detected_stack.append("python")
+            if any("package.json" in f for f in file_paths): detected_stack.extend(["javascript", "node"])
+            if any(f.endswith(".ts") or f.endswith(".tsx") for f in file_paths): detected_stack.append("typescript")
+            if any("requirements.txt" in f or "pyproject.toml" in f for f in file_paths): detected_stack.append("fastapi")
+            if any("dockerfile" in f for f in file_paths): detected_stack.append("docker")
+            if any(f.endswith(".go") for f in file_paths): detected_stack.append("go")
+            if any(f.endswith(".rs") for f in file_paths): detected_stack.append("rust")
+            if any(f.endswith(".java") for f in file_paths): detected_stack.append("java")
+    except Exception:
+        detected_stack = ["python", "javascript"]
 
     return {
-        "name": data["name"],
-        "full_name": data["full_name"],
-        "description": data["description"],
-        "owner": data["owner"]["login"],
-        "language": data["language"],
-        "stars": data["stargazers_count"],
-        "forks": data["forks_count"],
-        "default_branch": data["default_branch"],
-        "html_url": data["html_url"],
+        "owner": owner,
+        "repo": repo,
+        "readme_content": readme_content,
+        "detected_stack": list(set(detected_stack)) or ["python"]
     }
