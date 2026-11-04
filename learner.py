@@ -1,20 +1,25 @@
 """Learns from top GitHub repositories in the background while FixREADME is running.
 
 What happens, in order:
-  1. The app starts this thread (only when a GitHub token is available).
-  2. It builds a pool of popular repositories and inspects up to LEARN_TARGET of them (5,000 by default),
-     saving every result to data/progress.jsonl.
-  3. When LEARN_MILESTONE repositories (1,000) have been inspected, it writes data/feature_profile.json.
-     From that moment FixREADME uses the findings. No restart is needed, because best_practices.py
-     reads the file on every request.
-  4. It refreshes the findings every LEARN_STEP repositories (500) and once more at the end.
-  5. If you close the app, nothing is lost. The next launch reads progress.jsonl, uses the findings
-     that already exist, and carries on from the repository where it stopped.
+  1. The app calls start_learning(). It does nothing unless LEARN_ENABLED is True in config.py
+     and a GitHub token is available.
+  2. It builds a pool of popular repositories and inspects up to LEARN_TARGET of them, saving
+     every result to data/progress.jsonl as it goes.
+  3. When LEARN_MILESTONE repositories have been inspected, it writes data/feature_profile.json.
+     best_practices.py reads that file on every request, so no restart is needed.
+  4. It refreshes the findings every LEARN_STEP repositories and once more at the end.
+  5. If the app is closed, nothing is lost. The next launch reads progress.jsonl, uses the findings
+     that already exist, and continues where it stopped.
 
-It never uses the whole GitHub quota: LEARN_RESERVE reads are always kept free for README requests.
+Limits that protect your GitHub quota:
+  - LEARN_RESERVE core requests are always kept free for README requests. When the remaining
+    core quota reaches that number, learning pauses and resumes on the next launch.
+  - When GitHub reports a rate limit, learning pauses instead of waiting for the reset.
+  - Search requests have their own quota and are not counted against LEARN_RESERVE.
 """
 import json
 import threading
+import time
 from pathlib import Path
 
 import trending_repos as tr
@@ -22,16 +27,38 @@ from config import LEARN_ENABLED, LEARN_MILESTONE, LEARN_RESERVE, LEARN_STEP, LE
 from local_ai import log
 
 MIN_SCORE = 60.0
-LOG_EVERY = 50
+LOG_EVERY = 10
 MAX_FAILURES = 5
 
 
-class _Client(tr.GitHub):
-    """GitHub client that reports through the app's log and keeps the terminal quiet while searching."""
+class ReserveReached(RuntimeError):
+    """Raised when learning must stop to keep the remaining GitHub requests for README requests."""
 
-    def log(self, message):
-        if not message.startswith("Searching"):
-            log(f"Learning: {message}")
+
+class _Client(tr.GitHub):
+    """GitHub client for learning. It stays quiet, never waits for a rate limit, and keeps a reserve."""
+
+    def __init__(self, reserve=0, sleep_fn=None, token=None):
+        super().__init__(token=token, pause=0.5, verbose=False, wait_for_limit=False,
+                         sleep=sleep_fn or time.sleep)
+        self.reserve = reserve
+        self.core_remaining = None
+
+    def _request(self, url, accept="application/vnd.github+json", timeout=20):
+        response = super()._request(url, accept=accept, timeout=timeout)
+        # Only the core quota is reserved. Search has its own quota, reported under another resource name.
+        if response.headers.get("X-RateLimit-Resource", "core") == "core":
+            value = response.headers.get("X-RateLimit-Remaining", "")
+            if value.isdigit():
+                self.core_remaining = int(value)
+        return response
+
+    def get_json(self, path, params="", search=False):
+        if not search and self.core_remaining is not None and self.core_remaining <= self.reserve:
+            raise ReserveReached(
+                f"Paused: {self.core_remaining} GitHub requests are left, and {self.reserve} are kept for README "
+                "requests. Learning resumes the next time the app starts.")
+        return super().get_json(path, params, search=search)
 
 
 class Learner:
@@ -55,7 +82,7 @@ class Learner:
         self.publishes = 0
         self._published_at = 0
 
-    # ---- control -----------------------------------------------------------------------------
+    # ---- control -------------------------------------------------------------------------
 
     def start(self):
         with self._lock:
@@ -75,7 +102,7 @@ class Learner:
     def _set(self, state, message):
         self.state, self.message = state, message
 
-    # ---- work --------------------------------------------------------------------------------
+    # ---- work ----------------------------------------------------------------------------
 
     def _safe_run(self):
         try:
@@ -87,7 +114,7 @@ class Learner:
     def _client(self):
         if self._client_factory:
             return self._client_factory()
-        return _Client(wait_for_limit=True, reserve=self.reserve, should_stop=self._stop.is_set)
+        return _Client(reserve=self.reserve, sleep_fn=self._stop.wait)
 
     def _publish(self, records):
         """Write the JSON files. feature_profile.json is what the rest of the app reads."""
@@ -95,13 +122,13 @@ class Learner:
         self.in_use = True
         self.publishes += 1
         self._published_at = len(records)
-        log(f"Learning: findings from {len(records)} repositories are saved and now used for new READMEs.")
+        log(f"Learning: findings from {len(records)} repositories are saved and used for new READMEs.")
 
     def _profile_exists(self):
         return (self.out_dir / "feature_profile.json").exists()
 
     def _prepare_progress_file(self, path):
-        """A run that was killed mid-write can leave a half line. Start the next record on a fresh line."""
+        """A run that was stopped mid-write can leave a partial line. Start the next record on a new line."""
         try:
             data = path.read_bytes()
         except OSError:
@@ -114,6 +141,10 @@ class Learner:
         if count < self.milestone:
             return False
         return count == self.milestone or (count - self.milestone) % self.step == 0
+
+    def _pause(self, message):
+        self._set("paused", message)
+        log(f"Learning paused. {message}")
 
     def _run(self):
         gh = self._client()
@@ -129,10 +160,9 @@ class Learner:
         records = list(done.values())
         self.inspected = len(records)
 
-        if self.inspected >= self.milestone:
-            self.in_use = self._profile_exists()
-            if not self.in_use:
-                self._publish(records)
+        if self.inspected >= self.milestone and not self._profile_exists():
+            self._publish(records)
+        self.in_use = self._profile_exists()
         if self.inspected:
             log(f"Learning: continuing with {self.inspected} of {self.target} repositories already studied.")
         if self.inspected >= self.target:
@@ -140,17 +170,16 @@ class Learner:
             return
 
         self._set("collecting", "Looking for popular repositories.")
-        log(f"Learning: building a pool of popular repositories (target {self.target}). This runs in the background.")
+        log(f"Learning: building a pool of popular repositories (target {self.target}).")
         try:
             candidates = tr.collect_candidates(gh, 20, None, None, target=self.target)
+        except ReserveReached as error:
+            return self._pause(str(error))
         except RuntimeError as error:
-            self._set("paused", str(error))
-            log(f"Learning paused: {error} It tries again the next time the app starts.")
-            return
+            return self._pause(str(error))
         if not candidates:
-            self._set("paused", "No repositories were found. GitHub may be unreachable.")
-            log("Learning paused: no repositories were found. It tries again the next time the app starts.")
-            return
+            return self._pause("No repositories were found. GitHub may be unreachable.")
+
         selected = tr.select_candidates(candidates, self.target)
         todo = [(name, entry) for name, entry in selected if name not in done]
         log(f"Learning: {len(candidates)} repositories found; studying {len(todo)} more.")
@@ -164,12 +193,14 @@ class Learner:
                 try:
                     readme = gh.readme(name)
                     files = gh.root_files(name)
+                except ReserveReached as error:
+                    return self._pause(str(error))
                 except RuntimeError as error:
+                    if "rate limit" in str(error).lower():
+                        return self._pause(str(error))
                     failures += 1
                     if "rejected" in str(error).lower() or failures >= MAX_FAILURES:
-                        self._set("paused", str(error))
-                        log(f"Learning paused: {error} It continues from here the next time the app starts.")
-                        return
+                        return self._pause(str(error))
                     log(f"Learning: {error} Trying again in {self.retry_wait} seconds.")
                     self._stop.wait(self.retry_wait)
                     continue
@@ -201,7 +232,7 @@ learner = Learner()
 def start_learning():
     """Called by app.py. Does nothing unless learning is enabled and a token exists."""
     if not LEARN_ENABLED:
-        learner._set("off", "Learning from top repositories is turned off (FIXREADME_LEARN=0).")
+        learner._set("off", "Learning from top repositories is off (LEARN_ENABLED is False in config.py).")
         return False
     if not server_github_token():
         learner._set("no_token", "Add GITHUB_TOKEN to .env to learn from top repositories in the background.")

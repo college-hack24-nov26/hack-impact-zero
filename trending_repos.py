@@ -14,7 +14,7 @@ Usage:
   python trending_repos.py --orgs google microsoft vercel --token ghp_xxx
   python trending_repos.py --offline-sample sample.json   # score repos from a saved file
 
-Collecting 5000 repositories (the default when a token is set):
+Collecting 1000 repositories (the default when a token is set):
   1. Create a token at https://github.com/settings/tokens (no permissions needed for public data).
   2. Put it in a file named .env next to this script:   GITHUB_TOKEN=your_token_here
      (.env is in .gitignore, so it is never uploaded). Or set the GITHUB_TOKEN variable.
@@ -38,7 +38,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from config import LEARN_TARGET as DEFAULT_TARGET, clean_token, server_github_token
+from config import clean_token, server_github_token
 
 API = "https://api.github.com"
 USER_AGENT = "FixREADME-Trending/1.0"
@@ -83,12 +83,8 @@ SECTION_PATTERNS = {
 class GitHub:
     SEARCH_GAP = 2.2          # the search API allows 30 requests per minute with a token
 
-    def __init__(self, token=None, pause=0.0, verbose=True, wait_for_limit=True, max_wait=3900, sleep=time.sleep,
-                 reserve=0, should_stop=None):
+    def __init__(self, token=None, pause=0.0, verbose=True, wait_for_limit=True, max_wait=3900, sleep=time.sleep):
         self.token = clean_token(token) if token else server_github_token()
-        self.reserve = reserve            # core requests left untouched for other users of the same token
-        self.should_stop = should_stop or (lambda: False)
-        self.reset_at = None
         self.pause = pause
         self.verbose = verbose
         self.wait_for_limit = wait_for_limit
@@ -108,20 +104,6 @@ class GitHub:
             headers["Authorization"] = f"Bearer {self.token}"
         return urlopen(Request(url, headers=headers), timeout=timeout)
 
-    def _respect_reserve(self):
-        """Pause until the hourly limit resets when only the reserve is left."""
-        if not self.reserve or self.remaining is None or self.remaining > self.reserve or not self.reset_at:
-            return
-        wait = max(1, self.reset_at - int(time.time())) + 2
-        if wait > self.max_wait:
-            return
-        self.log(f"Keeping {self.reserve} GitHub reads free for you. Resuming in {wait // 60 + 1} minute(s).")
-        slept = 0
-        while slept < wait and not self.should_stop():
-            self.sleep(min(5, wait - slept))
-            slept += 5
-        self.remaining = None
-
     def _wait_seconds(self, error):
         """Seconds to wait after a 403/429, or None if this is not a rate limit."""
         headers = error.headers or {}
@@ -139,8 +121,6 @@ class GitHub:
         url = API + path + (("?" + params) if params else "")
         failures = 0
         while True:
-            if not search:
-                self._respect_reserve()
             if search:
                 gap = self.SEARCH_GAP - (time.time() - self._last_search)
                 if gap > 0:
@@ -148,11 +128,8 @@ class GitHub:
                 self._last_search = time.time()
             try:
                 with self._request(url) as response:
-                    if response.headers.get("X-RateLimit-Resource", "core") == "core":   # search has its own bucket
-                        remaining = response.headers.get("X-RateLimit-Remaining")
-                        reset = response.headers.get("X-RateLimit-Reset")
-                        self.remaining = int(remaining) if remaining and remaining.isdigit() else self.remaining
-                        self.reset_at = int(reset) if reset and reset.isdigit() else self.reset_at
+                    remaining = response.headers.get("X-RateLimit-Remaining")
+                    self.remaining = int(remaining) if remaining and remaining.isdigit() else self.remaining
                     data = json.loads(response.read().decode("utf-8"))
                 if self.pause:
                     self.sleep(self.pause)
@@ -226,12 +203,6 @@ def _days_ago(days):
 STAR_BANDS = ["stars:>=100000", "stars:60000..99999", "stars:40000..59999", "stars:30000..39999",
               "stars:20000..29999", "stars:15000..19999", "stars:10000..14999", "stars:7000..9999",
               "stars:5000..6999", "stars:3000..4999"]
-# Used instead when the target is several thousand. A search returns at most 1000 repositories, so the
-# range is cut into narrow, non-overlapping bands; together they hold far more than 5000 repositories.
-HUGE_STAR_BANDS = ["stars:>=60000", "stars:30000..59999", "stars:20000..29999", "stars:15000..19999",
-                   "stars:12000..14999", "stars:10000..11999", "stars:8500..9999", "stars:7000..8499",
-                   "stars:6000..6999", "stars:5000..5999", "stars:4300..4999", "stars:3700..4299",
-                   "stars:3200..3699", "stars:2800..3199", "stars:2400..2799", "stars:2100..2399"]
 
 
 def collect_candidates(gh, per_source=20, orgs=None, languages=None, target=None):
@@ -242,8 +213,7 @@ def collect_candidates(gh, per_source=20, orgs=None, languages=None, target=None
     """
     found = {}
     big = bool(target and target > 100)
-    huge = bool(target and target > 1500)
-    pages = 10 if huge else (3 if big else 1)
+    pages = 3 if big else 1
     per_page = 100 if big else per_source
 
     def add(items, category):
@@ -254,23 +224,17 @@ def collect_candidates(gh, per_source=20, orgs=None, languages=None, target=None
             entry = found.setdefault(name, {"repo": item, "categories": set()})
             entry["categories"].add(category)
 
-    misses = [0]
-
     def search(label, query, category, pages_=1):
         gh.log(f"Searching {label}...")
         try:
             add(gh.search_repos(query, "stars", per_page, pages_), category)
-            misses[0] = 0
         except RuntimeError as error:
-            if any(word in str(error).lower() for word in ("rate limit", "rejected", "could not reach")):
+            if "rate limit" in str(error).lower() or "rejected" in str(error).lower():
                 raise
-            misses[0] += 1
-            if misses[0] >= 4:   # GitHub keeps refusing: stop instead of trying hundreds of searches
-                raise RuntimeError(f"GitHub keeps refusing search requests ({error}).") from None
             gh.log(f"Skipped {label}: {error}")
 
     if big:
-        for band in (HUGE_STAR_BANDS if huge else STAR_BANDS):
+        for band in STAR_BANDS:
             search(f"top repositories ({band})", band, "top", pages)
     else:
         search("top (most starred) repositories", "stars:>50000", "top")
@@ -604,12 +568,12 @@ def run(args):
                                 set(item.get("categories", []))) for item in sample]
         return save_results(records, args.min_score, out)
 
-    limit = args.limit or (DEFAULT_TARGET if gh.token else 40)
+    limit = args.limit or (1000 if gh.token else 40)
     if gh.token:
         gh.log("Using the GitHub token from GITHUB_TOKEN / .env (it is never printed or saved).")
     else:
-        gh.log(f"No GitHub token found: limited to 60 requests per hour, so the target is 40 repositories. "
-               f"Put GITHUB_TOKEN=... in a .env file to collect {DEFAULT_TARGET}.")
+        gh.log("No GitHub token found: limited to 60 requests per hour, so the target is 40 repositories. "
+               "Put GITHUB_TOKEN=... in a .env file to collect 1000.")
 
     progress_path = out / "progress.jsonl"
     done = {} if args.fresh else load_progress(progress_path)
@@ -651,7 +615,7 @@ def run(args):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Score trending, viral, famous, top and big-company GitHub repositories.")
     p.add_argument("--limit", type=int, default=None,
-                   help=f"repositories to inspect (default: {DEFAULT_TARGET} with a token, 40 without)")
+                   help="repositories to inspect (default: 1000 with a token, 40 without)")
     p.add_argument("--per-source", type=int, default=20, help="results per search (default 20)")
     p.add_argument("--min-score", type=float, default=60.0, help="score needed to enter best_repos.json (default 60)")
     p.add_argument("--orgs", nargs="*", default=None, help="company organisations to include (default: a built-in list)")

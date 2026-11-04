@@ -12,7 +12,7 @@ PROFILE_PATH = BASE_DIR / "data" / "feature_profile.json"
 
 # Sections that nearly every well-regarded README has. Used until the first trending run.
 DEFAULT_RECOMMENDED = [
-    "features", "installation", "usage", "prerequisites",
+    "features", "installation", "usage", "table_of_contents", "prerequisites",
     "contributing", "license", "support",
 ]
 

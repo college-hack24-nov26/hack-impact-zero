@@ -124,7 +124,7 @@
     $("apiKeyInput").value = settings.api_key || "";
     $("baseUrlInput").value = settings.base_url || "";
     $("modelInput").value = settings.model || "";
-    hideKeyField();
+    setKeyVisible(false);
     $("githubTokenInput").value = loadGithubToken();
     $("githubTokenInput").type = "password";
     $("toggleGhBtn").textContent = "Show";
@@ -135,12 +135,6 @@
     $("testResult").textContent = "";
     $("testResult").removeAttribute("data-state");
     refreshProviderHints();
-  }
-
-  function hideKeyField() {
-    $("apiKeyInput").type = "password";
-    $("toggleKeyBtn").textContent = "Show";
-    $("toggleKeyBtn").setAttribute("aria-pressed", "false");
   }
 
   function readForm() {
@@ -160,6 +154,14 @@
     $("apiKeyInput").disabled = name === "ollama";
     $("apiKeyInput").placeholder = name === "ollama" ? "Not needed for local Ollama" : "Paste your API key";
     $("keyHint").textContent = name === "ollama" ? "not needed for local Ollama" : "required for hosted APIs";
+    // The Show/Hide button stays usable so a visible key can always be hidden again.
+    if (name === "ollama") setKeyVisible(false);
+  }
+
+  function setKeyVisible(show) {
+    $("apiKeyInput").type = show ? "text" : "password";
+    $("toggleKeyBtn").textContent = show ? "Hide" : "Show";
+    $("toggleKeyBtn").setAttribute("aria-pressed", String(show));
   }
 
   $("settingsBtn").addEventListener("click", () => {
@@ -168,13 +170,7 @@
     $("providerSelect").focus();
   });
   $("providerSelect").addEventListener("change", refreshProviderHints);
-  $("toggleKeyBtn").addEventListener("click", () => {
-    const input = $("apiKeyInput");
-    const show = input.type === "password";
-    input.type = show ? "text" : "password";
-    $("toggleKeyBtn").textContent = show ? "Hide" : "Show";
-    $("toggleKeyBtn").setAttribute("aria-pressed", String(show));
-  });
+  $("toggleKeyBtn").addEventListener("click", () => setKeyVisible($("apiKeyInput").type === "password"));
   $("toggleGhBtn").addEventListener("click", () => {
     const input = $("githubTokenInput");
     const show = input.type === "password";
@@ -216,7 +212,7 @@
     }
     $("githubTokenInput").value = "";
     $("githubTokenInput").type = "password";
-    hideKeyField();
+    setKeyVisible(false);
     $("settingsDialog").close(choice === "save" ? "save" : "cancel");
     refreshStatus();
   });
@@ -299,6 +295,7 @@
     const cells = row => row.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
     let html = "";
     let para = [];
+    let centered = 0;
     const flush = () => { if (para.length) { html += `<p>${renderInline(para.join(" "))}</p>`; para = []; } };
     let i = 0;
     while (i < lines.length) {
@@ -311,6 +308,19 @@
         while (i < lines.length && !/^```/.test(lines[i])) { code.push(lines[i]); i++; }
         i++;
         html += codeBlock(fence[1], code.join("\n"));
+        continue;
+      }
+      // Only two pieces of raw HTML are understood, because READMEs use them for a centered header:
+      // <div align="center"> ... </div>, and a single <img src width alt> line. Everything else stays escaped text.
+      if (/^\s*<div\s+align=["']center["']\s*>\s*$/i.test(line)) { flush(); html += '<div class="md-center">'; centered++; i++; continue; }
+      if (/^\s*<\/div>\s*$/i.test(line)) { flush(); if (centered > 0) { html += "</div>"; centered--; } i++; continue; }
+      const rawImg = line.match(/^\s*<img\s+([^>]*)>\s*$/i);
+      if (rawImg) {
+        flush();
+        const attr = name => (rawImg[1].match(new RegExp(name + '=["\']([^"\']*)["\']', "i")) || [])[1] || "";
+        const width = Math.min(Math.max(parseInt(attr("width"), 10) || 0, 0), 600);
+        html += `<p><img alt="${escapeText(attr("alt"))}" src="${safeUrl(escapeText(attr("src")))}"${width ? ` width="${width}"` : ""} loading="lazy"></p>`;
+        i++;
         continue;
       }
       const heading = line.match(/^(#{1,6})\s+(.*)$/);
@@ -354,16 +364,65 @@
       i++;
     }
     flush();
+    while (centered-- > 0) html += "</div>";
     return html;
+  }
+
+  // ---------- loading animation ----------
+  // Plays static/loader.json with lottie-web when it is available, and falls back to a CSS version of the same dots.
+  const LOADER_STEPS = ["Reading the repository…", "Analyzing the project files…", "Writing your README…"];
+  let loaderAnim = null;
+  let loaderTimer = null;
+
+  function stopLoader() {
+    clearInterval(loaderTimer);
+    loaderTimer = null;
+    if (loaderAnim) { try { loaderAnim.destroy(); } catch { /* ignore */ } loaderAnim = null; }
+  }
+
+  function showLoader(slow) {
+    stopLoader();
+    const preview = $("readmePreview");
+    preview.innerHTML =
+      '<div class="loader-state" role="status" aria-live="polite">' +
+      '<div class="loader-art" id="loaderArt"><div class="dots-fallback" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>' +
+      '<p class="loader-title" id="loaderTitle"></p>' +
+      `<p class="loader-sub">${escapeHtml(slow)}</p></div>`;
+    preview.scrollTop = 0;
+    const title = $("loaderTitle");
+    let step = 0;
+    const setStep = () => {
+      title.classList.remove("in");
+      void title.offsetWidth;
+      title.textContent = LOADER_STEPS[Math.min(step, LOADER_STEPS.length - 1)];
+      title.classList.add("in");
+      step++;
+    };
+    setStep();
+    loaderTimer = setInterval(setStep, 3500);
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (window.lottie && !reduce) {
+      try {
+        loaderAnim = window.lottie.loadAnimation({
+          container: $("loaderArt"), renderer: "svg", loop: true, autoplay: true,
+          path: document.body.dataset.loaderSrc,
+          // The dots span x 171-505 and y 207-390 over one loop (measured from loader.json), so the view box adds a margin on every side.
+          rendererSettings: { viewBoxSize: "128 168 420 262", preserveAspectRatio: "xMidYMid meet", progressiveLoad: false }
+        });
+        loaderAnim.addEventListener("DOMLoaded", () => $("loaderArt")?.classList.add("lottie-on"));
+      } catch { /* keep CSS fallback */ }
+    }
   }
 
   function renderPreview(markdown) {
     const preview = $("readmePreview");
+    stopLoader();
     if (!markdown.trim()) {
       preview.innerHTML = '<div class="empty-state"><p class="empty-title">Your README will appear here.</p><p>Add a GitHub link or some notes, then select Generate README. Commands in the result get a Copy button.</p></div>';
       return;
     }
     preview.innerHTML = renderMarkdown(markdown);
+    preview.classList.remove("just-rendered"); void preview.offsetWidth; preview.classList.add("just-rendered");
     preview.scrollTop = 0;
   }
 
@@ -434,12 +493,12 @@
     const button = $("generateBtn");
     const label = button.querySelector("span");
     button.disabled = true;
-    button.setAttribute("aria-busy", "true");
     label.textContent = "Generating…";
+    button.setAttribute("aria-busy", "true");
     showNotice("");
     $("generatorLine").textContent = "Working on it…";
     $("indexChip").hidden = true;
-    $("readmePreview").innerHTML = '<div class="empty-state"><p class="empty-title">Reading the project…</p><p>A local model can take a minute on a slow computer.</p></div>';
+    showLoader("A local model can take a minute on a slow computer.");
     setOutputView("preview");
     try {
       const data = await postJson("/api/generate", {

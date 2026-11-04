@@ -94,8 +94,7 @@ code { font-family: var(--mono); font-size: 12.5px; }
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
 }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); white-space: nowrap; min-width: 0; }
-.logo { width: 32px; height: 32px; border-radius: 9px; background: #0047ff; display: grid; place-items: center; flex-shrink: 0; }
-.logo svg { width: 20px; height: 20px; }
+.logo { width: 34px; height: 34px; border-radius: 9px; display: block; flex-shrink: 0; box-shadow: 0 1px 2px rgba(15, 23, 42, .18); }
 .brand-name { font-family: var(--display); font-weight: 700; font-size: 19px; letter-spacing: -.02em; }
 .version {
   font: 500 11px/1 var(--mono); color: var(--muted); padding: 4px 8px; border-radius: 999px;
@@ -231,7 +230,7 @@ textarea {
 .btn.ghost { background: transparent; border-color: var(--line-strong); color: var(--ink-2); }
 .btn.ghost:hover { background: var(--surface-2); border-color: var(--line-strong); color: var(--ink); }
 .btn:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
-.btn[aria-busy="true"] { cursor: progress; }
+.btn[aria-busy="true"]:disabled { cursor: progress; }
 
 /* Tip card */
 .tip-card { display: flex; gap: 12px; align-items: flex-start; padding: 16px 18px; }
@@ -318,6 +317,14 @@ textarea {
 .preview th { background: var(--surface-2); font-weight: 650; color: var(--ink); }
 .preview hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0; }
 
+/* Centered README header (logo, title, tagline, badges, link row) */
+.preview .md-center { text-align: center; margin-bottom: 8px; }
+.preview .md-center h1 { border-bottom: 0; padding-bottom: 0; margin: .1em 0 .3em; }
+.preview .md-center p { margin: 0 0 12px; }
+.preview .md-center p img { margin: 0 3px 6px; }
+.preview .md-center p:last-child { color: var(--ink-2); font-size: 14px; line-height: 1.9; }
+.preview .md-center a { white-space: nowrap; }
+
 /* Code blocks with Copy */
 .codeblock { margin: 0 0 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--code-bg); overflow: hidden; }
 .codebar {
@@ -402,3 +409,51 @@ textarea {
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); cursor: pointer; flex-wrap: wrap; }
 .check-row input { width: 16px; height: 16px; accent-color: currentColor; }
 .settings { max-height: 92vh; overflow-y: auto; }
+
+/* ---------- Motion: small and quick ---------- */
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
+
+.source-panel, .tip-card, .doc { animation: rise .45s cubic-bezier(.2,.7,.3,1) both; }
+.tip-card { animation-delay: .07s; }
+.doc { animation-delay: .12s; }
+.analysis-wrap:not([hidden]) .analysis-panel { animation: rise .35s ease both; }
+.analysis-row { animation: fade .4s ease both; }
+.analysis-row:nth-child(2) { animation-delay: .04s; } .analysis-row:nth-child(3) { animation-delay: .08s; }
+.analysis-row:nth-child(4) { animation-delay: .12s; } .analysis-row:nth-child(5) { animation-delay: .16s; } .analysis-row:nth-child(6) { animation-delay: .2s; }
+
+.preview > *, .empty-state { animation: fade .35s ease both; }
+.preview.just-rendered > * { animation: rise .35s ease both; }
+.notice:not([hidden]), .status-chip:not([hidden]) { animation: pop .25s ease both; }
+
+.btn.primary:hover:not(:disabled) { transform: translateY(-1px); }
+.btn.primary:active:not(:disabled) { transform: translateY(0); }
+.icon-btn:hover svg { transform: rotate(30deg); }
+.icon-btn svg { transition: transform .3s ease; }
+.seg { transition: background-color .2s, color .2s, box-shadow .2s; }
+.seg:not(.active):hover { color: var(--ink); }
+.clear-x, .copy-btn, .status-pill { transition: background-color .15s, color .15s, border-color .15s, opacity .15s; }
+.test-result { transition: color .2s; }
+.doc-body > :not([hidden]) { animation: fade .25s ease both; }
+
+.settings[open] { animation: pop .22s cubic-bezier(.2,.7,.3,1) both; }
+.settings[open]::backdrop { animation: fade .22s ease both; }
+
+/* Loading state in the preview.
+   The art box has the same 420:262 ratio as the Lottie view box (see script.js), so the dots are never cropped. */
+.loader-state { height: 100%; min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; text-align: center; padding: 16px; }
+.loader-art { position: relative; width: 132px; aspect-ratio: 420 / 262; overflow: visible; }
+.loader-art svg { width: 100% !important; height: 100% !important; display: block; overflow: visible !important; }
+.loader-title { font: 700 16px var(--display); color: var(--ink); margin-top: 4px; }
+.loader-title.in { animation: fade .4s ease both; }
+.loader-sub { font-size: 12.5px; color: var(--muted); max-width: 320px; }
+.dots-fallback { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 9px; }
+.lottie-on .dots-fallback { display: none; }
+.dots-fallback i { width: 10px; height: 10px; border-radius: 50%; background: #2bd5cb; animation: hop 1s cubic-bezier(.7,0,.3,1) infinite; }
+.dots-fallback i:nth-child(2) { animation-delay: .08s; } .dots-fallback i:nth-child(3) { animation-delay: .16s; } .dots-fallback i:nth-child(4) { animation-delay: .24s; }
+@keyframes hop { 0%, 100% { transform: translateY(0) scale(.75); } 50% { transform: translateY(-10px) scale(1.2); background: #ffc580; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

@@ -86,40 +86,77 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("style=for-the-badge&logo=python", readme)
         self.assertIn("img.shields.io/badge/flask", readme)
 
-    def test_prerequisites_are_added_but_no_table_of_contents(self):
-        readme, analysis = compose_readme(gather_evidence(FAKE_CONTEXT, ""))
-        self.assertNotIn("Table of Contents", readme)
-        self.assertNotIn("Table of Contents", analysis["sections_added"])
+    def test_navigation_is_one_compact_line_and_prerequisites_are_added(self):
+        readme, _ = compose_readme(gather_evidence(FAKE_CONTEXT, ""))
+        self.assertNotIn("## Table of Contents", readme)
+        nav = [line for line in readme.splitlines() if "(#quick-start)" in line and " • " in line]
+        self.assertEqual(len(nav), 1)
+        self.assertGreaterEqual(nav[0].count("](#"), 3)
+        self.assertLessEqual(nav[0].count("](#"), 8)
         self.assertIn("- Python 3 and pip", readme)
 
-    def test_existing_table_of_contents_is_removed(self):
-        source = ("# Demo\n\nA Python app.\n\n## Table of Contents\n\n- [Install](#install)\n- [Use](#use)\n\n"
-                  "## Install\n\npip install demo\n\n## Use\n\n- [One](#one)\n- [Two](#two)\n- [Three](#three)\n")
+    def test_long_existing_toc_is_replaced_by_the_compact_line(self):
+        source = ("# Demo\n\nA Python Flask web application that tracks books for small libraries and schools.\n\n"
+                  "## Table of Contents\n\n- [Usage](#usage)\n- [Install](#install)\n- [License](#license)\n"
+                  "- [Credits](#credits)\n\n## Usage\n\nRun it.\n\n## Install\n\npip install demo\n\n"
+                  "## License\n\nMIT\n")
         readme, _ = compose_readme(gather_evidence(None, source))
         self.assertNotIn("Table of Contents", readme)
-        self.assertNotIn("(#install)", readme)
-        self.assertNotIn("(#three)", readme)
-        self.assertIn("## Install", readme)
+        self.assertNotIn("- [Credits]", readme)
+        self.assertIn("[Usage](#usage) • ", readme)
 
-    def test_ai_output_never_keeps_copied_instructions(self):
-        leaked = ("# Demo\n\nDemo is a small Python tool that helps people check their files quickly and safely every day.\n\n"
-                  "## Features\n\n- **Fast** It checks files quickly and reports problems in plain words for everyone.\n\n"
-                  "Rules:\n- Do not add shields.io badges.\n- Do not write sections about API endpoints, routes, or tests.\n"
-                  "- Every command must be inside a ```bash code block, one command per line.\n"
-                  "- Keep paragraphs short (two to four sentences).\n"
-                  "- Do not invent facts the evidence does not support. If something is unknown, leave it out instead of guessing.\n\n"
-                  "## License\n\nMIT\n")
-        readme, analysis = compose_readme(gather_evidence(None, "# Demo\nA Python tool."), leaked)
-        self.assertTrue(analysis["ai_used"])
-        for phrase in ("Rules:", "shields.io badges", "Keep paragraphs short", "Do not invent facts", "Every command must"):
-            self.assertNotIn(phrase, readme)
-        self.assertIn("## Features", readme)
+    def test_introduction_comes_first_and_is_descriptive(self):
+        readme, analysis = compose_readme(gather_evidence(FAKE_CONTEXT, ""))
+        headings = [line for line in readme.splitlines() if line.startswith("## ")]
+        self.assertEqual(headings[0], "## Introduction")
+        self.assertIn("Introduction", analysis["sections_added"])
+        intro = readme.split("## Introduction", 1)[1].split("\n## ", 1)[0]
+        self.assertGreaterEqual(len([p for p in intro.split("\n\n") if p.strip()]), 3)
+        self.assertGreater(len(intro), 500)
 
-    def test_prompt_keeps_rules_out_of_the_user_message(self):
-        from llm import build_prompt
-        system, user = build_prompt(gather_evidence(FAKE_CONTEXT, ""))
-        self.assertNotIn("Rules:", user)
-        self.assertIn("table of contents", system.lower())
+    def test_ai_lead_becomes_the_introduction(self):
+        ai = ("# Demo Tool\n\nDemo Tool converts CSV files into JSON for analysts who need a quick, dependable "
+              "conversion step inside their own scripts and dashboards, without writing any glue code at all.\n\n"
+              "## Features\n\n- Converts large files in streaming chunks so memory use stays low.\n")
+        readme, _ = compose_readme(gather_evidence(FAKE_CONTEXT, ""), ai_markdown=ai)
+        intro = readme.split("## Introduction", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("converts CSV files into JSON", intro)
+        self.assertEqual(readme.count("## Introduction"), 1)
+
+    def test_header_is_centered_with_title_tagline_badges_and_nav(self):
+        readme, _ = compose_readme(gather_evidence(FAKE_CONTEXT, ""))
+        header = readme.split("</div>", 1)[0]
+        self.assertTrue(readme.startswith('<div align="center">'))
+        for part in ("# demo", "**A small Flask service that converts CSV files to JSON.**", "img.shields.io", "(#features)"):
+            self.assertIn(part, header)
+
+    def test_repository_logo_is_shown_in_the_header(self):
+        context = dict(FAKE_CONTEXT, paths=FAKE_CONTEXT["paths"] + ["assets/logo.png", "node_modules/a/logo.png"],
+                       metadata=dict(FAKE_CONTEXT["metadata"], default_branch="main"))
+        readme, _ = compose_readme(gather_evidence(context, ""))
+        self.assertIn('<img src="https://raw.githubusercontent.com/example/demo/main/assets/logo.png" width="120"', readme)
+        self.assertNotIn("node_modules", readme)
+        plain, _ = compose_readme(gather_evidence(FAKE_CONTEXT, ""))
+        self.assertNotIn("<img", plain)
+
+    def test_running_again_on_a_generated_readme_keeps_one_header(self):
+        first, _ = compose_readme(gather_evidence(FAKE_CONTEXT, ""))
+        again, _ = compose_readme(gather_evidence(None, first))
+        self.assertEqual(again.count('<div align="center">'), 1)
+        self.assertEqual(again.count("## Introduction"), 1)
+        self.assertEqual(again.count("# demo"), 1)
+        self.assertEqual(again.split("</div>", 1)[0].count(" • "), first.split("</div>", 1)[0].count(" • "))
+
+    def test_ordinary_word_go_is_not_read_as_the_go_language(self):
+        readme, analysis = compose_readme(gather_evidence(None, "# Demo\n\nGo to the settings page and pick a theme."))
+        self.assertNotIn("Go", analysis["languages"])
+
+    def test_feature_and_technology_lines_are_full_sentences(self):
+        readme, _ = compose_readme(gather_evidence(FAKE_CONTEXT, ""))
+        bullets = [l for l in readme.splitlines() if l.startswith("- **")]
+        self.assertTrue(bullets)
+        for line in bullets:
+            self.assertGreater(len(line.split()), 9, line)
 
     def test_existing_sections_are_not_duplicated(self):
         source = "# Demo\n\nA Python Flask web application.\n\n## Installation\n\npip install demo\n"
